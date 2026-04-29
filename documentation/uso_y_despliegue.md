@@ -127,3 +127,250 @@ Los siguientes ficheros pertenecen a la entrega de la Week 8: Containerization (
 * `code/nginx-app/Dockerfile` - Dockerfile para la construcción de la imagen Nginx
 * `code/simple_app/server.js` - Código fuente del servidor backend
 * `code/simple_app/Dockerfile` - Dockerfile para la construcción de la imagen Node.js
+
+---
+
+## Week 9: Multi-Container Orchestration (Docker Compose)
+
+En esta fase, evolucionamos de gestionar contenedores individuales manualmente a orquestar una pila (stack) completa de servicios que se comunican entre sí utilizando Docker Compose.
+
+### 1. Actualización de la Estructura de Directorios
+Se ha creado un nuevo directorio para aislar la orquestación, copiando los artefactos de la Week 8 e introduciendo la configuración de Compose y del recolector de logs:
+
+```text
+~/gsx-practica2/
+└── docker-compose/
+    ├── nginx-app/             # (Copiado de la Week 8)
+    ├── simple-app/            # (Copiado de la Week 8)
+    ├── fluentd/
+    │   └── fluent.conf        # Configuración del recolector de logs
+    ├── .env                   # Variables de entorno reales (Ignorado en Git)
+    ├── .env.example           # Plantilla de variables para el repositorio
+    ├── .gitignore             # Evita la subida de secretos
+    └── docker-compose.yml     # Archivo principal de orquestación
+```
+
+---
+
+### 2. Preparación del Entorno y Archivos Base
+
+**1. Instalación de Docker Compose:**
+En algunas distribuciones, Compose no viene incluido con el motor base. Se instala mediante:
+```bash
+sudo apt install docker-compose -y
+```
+
+**2. Creación del directorio y migración de contenedores:**
+```bash
+cd ~/gsx-practica2
+mkdir docker-compose
+cd docker-compose
+cp -r ../nginx-app ./
+cp -r ../simple-app ./
+```
+
+**3. Configuración Segura (Variables de Entorno):**
+Para evitar el *hardcoding* de configuración, creamos los archivos de entorno y protegemos los secretos.
+
+Crear el `.gitignore`:
+```bash
+echo ".env" > .gitignore
+```
+
+Crear el archivo con los valores reales (`.env`):
+```bash
+cat <<EOF > .env
+NODE_ENV=production
+BACKEND_PORT=3000
+NGINX_PORT=80
+EOF
+```
+
+Crear la plantilla de ejemplo para el repositorio (`.env.example`):
+```bash
+cat <<EOF > .env.example
+NODE_ENV=development
+BACKEND_PORT=3000
+NGINX_PORT=80
+EOF
+```
+
+**4. Configuración del Servicio de Logs (Fluentd):**
+Creamos la carpeta y el archivo de configuración para centralizar los registros:
+```bash
+mkdir fluentd
+cat <<EOF > fluentd/fluent.conf
+<source>
+  @type forward
+  port 24224
+  bind 0.0.0.0
+</source>
+
+<match **>
+  @type stdout
+</match>
+EOF
+```
+
+---
+
+### 3. El Archivo de Orquestación (`docker-compose.yml`)
+
+Este archivo YAML define todos los servicios (Nginx, Node.js, Fluentd), la persistencia (volúmenes), las redes privadas y las políticas de resiliencia. 
+
+Creamos el archivo:
+```bash
+nano docker-compose.yml
+```
+
+Y añadimos la siguiente configuración que abarca los niveles Básico, Intermedio y Avanzado:
+
+```yaml
+services:
+  # SERVICIO 1: FRONTEND (Nginx)
+  nginx:
+    build: ./nginx-app
+    ports:
+      - "${NGINX_PORT}:80"
+    networks:
+      - gsx_network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+      fluentd:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: nginx.access
+
+  # SERVICIO 2: BACKEND (Node.js)
+  backend:
+    build: ./simple-app
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${BACKEND_PORT}
+    networks:
+      - gsx_network
+    restart: always
+    volumes:
+      - backend_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      fluentd:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: backend.app
+
+  # SERVICIO 3: LOGGING COLLECTOR (Fluentd)
+  fluentd:
+    image: fluent/fluentd:v1.16-1
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    networks:
+      - gsx_network
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  gsx_network:
+    driver: bridge
+
+volumes:
+  backend_data:
+```
+
+---
+
+### 4. Comandos de Despliegue y Verificación
+
+El guion exige validar explícitamente el inicio, la comunicación y la persistencia de datos. 
+
+**1. Despliegue de la infraestructura completa:**
+Construye las imágenes si es necesario y levanta los contenedores en segundo plano.
+```bash
+docker-compose up -d
+```
+
+**2. Verificar el estado y los *healthchecks*:**
+Confirma que los servicios arrancan y están saludables (`healthy`).
+```bash
+docker-compose ps
+```
+
+**3. Probar comunicación externa:**
+```bash
+curl localhost
+curl localhost:3000
+```
+
+**4. Probar comunicación interna (Inter-service):**
+Validamos que la resolución DNS interna funciona llamando al backend desde Nginx utilizando su nombre de servicio.
+```bash
+docker-compose exec nginx curl http://backend:3000
+```
+
+**5. Verificar el recolector de logs centralizado:**
+Comprobamos que las peticiones anteriores se han registrado correctamente en Fluentd.
+```bash
+docker-compose logs fluentd
+```
+
+**6. Probar la persistencia de datos (Volúmenes):**
+Se simula una escritura de datos, se destruye la pila y se vuelve a levantar para asegurar que los datos en `/data` sobreviven.
+```bash
+# Crear un archivo de prueba en el backend
+docker-compose exec backend sh -c "echo 'Datos persistentes' > /data/prueba.txt"
+
+# Destruir los contenedores y la red
+docker-compose down
+
+# Volver a levantar todo
+docker-compose up -d
+
+# Comprobar que el archivo sigue existiendo
+docker-compose exec backend cat /data/prueba.txt
+```
+
+---
+
+### 5. Archivos de la Week 9
+
+Los siguientes ficheros se han creado y pertenecen a la entrega de la Week 9: Multi-Container Orchestration (Docker Compose):
+
+* `docker-compose/docker-compose.yml` - Definición del stack, redes y volúmenes.
+* `docker-compose/.env` - Variables de entorno locales (NO subir a Git).
+* `docker-compose/.env.example` - Plantilla de variables para el repositorio.
+* `docker-compose/.gitignore` - Exclusión del archivo `.env` del control de versiones.
+* `docker-compose/fluentd/fluent.conf` - Configuración del enrutamiento de logs.
