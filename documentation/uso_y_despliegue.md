@@ -374,3 +374,132 @@ Los siguientes ficheros se han creado y pertenecen a la entrega de la Week 9: Mu
 * `docker-compose/.env.example` - Plantilla de variables para el repositorio.
 * `docker-compose/.gitignore` - Exclusión del archivo `.env` del control de versiones.
 * `docker-compose/fluentd/fluent.conf` - Configuración del enrutamiento de logs.
+
+---
+
+## Week 10: Orquestación para Producción (Kubernetes)
+
+En esta semana abandonamos Docker Compose (orientado a desarrollo local) y migramos a **Kubernetes (K8s)**, el estándar de la industria para orquestación de contenedores en producción. Utilizaremos **Minikube** para simular un clúster de un solo nodo en nuestra máquina virtual.
+
+### 1. Instalación y Preparación del Clúster
+
+Antes de desplegar nada, necesitamos instalar las herramientas de Kubernetes y arrancar el clúster.
+
+**Comandos de Instalación y Arranque:**
+```bash
+# 1. Instalar Minikube (El simulador del clúster local)
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+
+# 2. Instalar kubectl (La herramienta cliente para hablar con el clúster)
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+# 3. Iniciar el clúster de Kubernetes
+minikube start
+```
+*   **¿Por qué `minikube start`?**: Este comando descarga una imagen ISO base, crea una máquina virtual interna (o contenedor de Docker) y arranca todos los componentes críticos de Kubernetes (el *Control Plane*, el *API Server*, el *Scheduler*, etc.).
+
+**Comandos de Verificación Base:**
+```bash
+kubectl cluster-info
+```
+*   **¿Por qué este comando?**: Verifica que tu herramienta `kubectl` se ha conectado correctamente al clúster recién creado. Te devolverá la IP y el puerto donde el "cerebro" de Kubernetes está escuchando tus órdenes.
+
+---
+
+### 2. Archivos de Configuración (Manifiestos YAML)
+
+En Kubernetes no ejecutamos comandos imperativos para levantar cosas (no hacemos `docker run`). En su lugar, creamos archivos YAML (manifiestos) donde declaramos cómo queremos que sea la infraestructura, y Kubernetes se encarga de hacerlo realidad. Hemos creado los siguientes archivos en la carpeta `kubernetes/`:
+
+*   **`configmap.yaml`**:
+    *   **Qué hace:** Crea un objeto de tipo `ConfigMap`.
+    *   **Por qué:** Sirve para almacenar variables de entorno (como `NODE_ENV=production` y `PORT=3000`). Esto desacopla la configuración de la imagen Docker. Si el puerto cambia, modificamos este archivo y no tenemos que recompilar el contenedor del backend.
+*   **`nginx.yaml`**:
+    *   **Qué hace:** Contiene dos recursos: un `Deployment` y un `Service`.
+    *   **Por qué (Deployment):** Le dice a K8s que mantenga siempre viva 1 réplica del contenedor Nginx. Además, incluye `requests` y `limits` (para que no consuma más de 128Mi de RAM) y *Probes* (chequeos de salud automáticos para saber si el contenedor está colgado).
+    *   **Por qué (Service NodePort):** Expone el Nginx hacia afuera. Mapea el puerto 80 interno al puerto `30080` de tu máquina para que puedas acceder desde el navegador.
+*   **`backend.yaml`**:
+    *   **Qué hace:** Contiene un `StatefulSet` y un `Service`.
+    *   **Por qué (StatefulSet):** A diferencia de un Deployment, se usa para aplicaciones que guardan datos. Le da al pod una identidad fija (siempre se llamará `backend-0`) y define un `PersistentVolumeClaim` (PVC) que pide un disco de 1GiB para que la carpeta `/data` no se borre nunca.
+    *   **Por qué (Service ClusterIP):** Crea un balanceador de carga interno. Solo permite que otros pods dentro del clúster (como Nginx) se comuniquen con el backend, manteniéndolo seguro del exterior.
+
+---
+
+### 3. Comandos de Despliegue de la Infraestructura
+
+Una vez creados los archivos, debemos enviarlos al clúster para que los procese.
+```bash
+# 1. Aplicar todos los manifiestos
+kubectl apply -f kubernetes/
+```
+*   **¿Por qué `apply -f`?**: El flag `-f` le indica que lea una carpeta o archivo. `apply` le dice al API Server: "Lee todos estos YAMLs y haz que el estado de mi clúster coincida con lo que está escrito aquí". Es un comando idempotente (si lo lanzas dos veces, no crea duplicados, solo aplica cambios si los hay).
+
+**Comandos de Monitorización del Despliegue:**
+```bash
+# Ver el estado de los Pods (Contenedores)
+kubectl get pods
+
+# Ver los pods en tiempo real
+kubectl get pods -w
+```
+*   **¿Por qué `-w` (watch)?**: Al principio, los pods estarán en `ContainerCreating` mientras K8s descarga tus imágenes de Docker Hub. El flag `-w` deja la terminal "escuchando" y te avisa en vivo cuando cambian a estado `Running`.
+```bash
+# Ver los servicios y sus IPs
+kubectl get services
+```
+*   **¿Por qué?**: Te permite comprobar qué IP interna ha asignado el DNS al `backend` y confirmar que el `nginx-service` ha abierto el puerto externo correcto (ej. `80:30080`).
+
+---
+
+### 4. Comandos de Pruebas y Validación (Testing)
+
+El guion requiere verificar que el frontend y el backend pueden hablar entre sí usando la resolución DNS nativa de Kubernetes.
+```bash
+# 1. Entrar de forma interactiva en el pod de Nginx
+kubectl exec -it <nombre-del-pod-nginx> -- bash
+```
+*   **¿Por qué `exec -it`?**: `exec` ejecuta un comando dentro de un pod existente. `-it` significa "Interactivo" y "Terminal (TTY)". Le pedimos que abra el programa `bash` para darnos una consola de comandos dentro del contenedor, igual que hacíamos en Docker.
+```bash
+# 2. Hacer una petición al backend desde dentro de Nginx
+curl http://backend:3000
+```
+*   **¿Por qué?**: Demuestra que el servidor DNS interno de Kubernetes (CoreDNS) funciona. Nginx no sabe la IP del backend, pero K8s traduce la palabra "backend" a la IP correcta del `ClusterIP Service` y devuelve el mensaje *"Hello from container"*.
+
+---
+
+### 5. Comandos de Escalabilidad (Auto-Scaling)
+
+Una de las grandes ventajas de Kubernetes es su capacidad para multiplicarse ante picos de tráfico.
+
+```bash
+# 1. Escalar hacia arriba (Scale up)
+kubectl scale deployment nginx --replicas=3
+```
+*   **¿Por qué?**: Modifica el estado deseado en caliente. Le ordena al *Controller Manager* que la infraestructura ahora requiere 3 copias de Nginx. K8s provisionará 2 Pods nuevos instantáneamente para balancear la carga de trabajo.
+```bash
+# 2. Escalar hacia abajo (Scale down)
+kubectl scale deployment nginx --replicas=1
+```
+*   **¿Por qué?**: Cuando el pico de tráfico pasa, volvemos a reducir el estado a 1. Kubernetes enviará una señal de apagado seguro (SIGTERM) a los 2 pods sobrantes para liberar memoria y CPU del servidor.
+
+---
+
+### 6. Comandos de Resiliencia (Self-Healing)
+
+Kubernetes está diseñado para sobrevivir a desastres y caídas de hardware sin intervención humana.
+```bash
+# 1. Simular una caída catastrófica borrando un pod
+kubectl delete pod <nombre-del-pod-nginx>
+```
+*   **¿Por qué?**: Destruye forzosamente el contenedor activo. Sirve para probar el "Auto-Healing" o autorecuperación.
+```bash
+# 2. Verificar la resurrección
+kubectl get pods
+```
+*   **¿Por qué?**: Al ejecutar esto inmediatamente después, verás que K8s ha detectado que falta un pod (tienes 0 pero le pediste 1) y en cuestión de segundos ha arrancado un pod completamente nuevo para sustituir al muerto, garantizando que el servicio no se caiga.
+```bash
+# 3. Consultar registros de un pod
+kubectl logs <nombre-del-nuevo-pod>
+```
+*   **¿Por qué `logs`?**: En caso de que el nuevo pod resucitado marque un estado de error (como `CrashLoopBackOff`), este comando extrae la salida estándar (stdout) del contenedor para que puedas investigar por qué la aplicación Node.js o Nginx está fallando internamente.

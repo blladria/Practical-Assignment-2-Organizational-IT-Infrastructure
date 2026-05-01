@@ -94,3 +94,53 @@ Para evitar comportamientos erráticos, hemos añadido:
 
 **¿Cuándo usar Compose vs. Kubernetes?**
 Docker Compose es ideal para entornos de desarrollo local y pruebas, ya que permite levantar rápidamente toda la pila tecnológica (stack) en una sola máquina sin complejidad. Sin embargo, está limitado para producción. Kubernetes se utiliza cuando el sistema necesita ejecutarse a gran escala, repartiendo la carga entre múltiples servidores, proporcionando recuperación automática ante fallos de hardware y realizando actualizaciones sin tiempo de inactividad (rolling updates).
+
+---
+
+## Week 10: Orquestación para Producción (Kubernetes)
+
+### El Problema (Contexto)
+Aunque Docker Compose es una herramienta excelente para el desarrollo local y pruebas, carece de las características necesarias para un entorno de producción real: no tiene auto-recuperación avanzada (self-healing), no distribuye la carga entre múltiples máquinas físicas y no escala horizontalmente de forma nativa. Necesitábamos una plataforma robusta que garantizara alta disponibilidad y resiliencia para los servicios de GreenDevCorp.
+
+### La Solución
+Para solucionar esto, hemos migrado la infraestructura a Kubernetes (utilizando Minikube para emular un clúster en el entorno local). Kubernetes actúa como un "director de orquesta" automatizado que supervisa la salud de los contenedores, los escala según la demanda y los reinicia instantáneamente en caso de fallo.
+
+### Decisiones de Diseño por Componente (Manifiestos)
+
+Hemos adoptado un enfoque declarativo, definiendo el estado deseado de nuestra infraestructura a través de manifiestos YAML:
+
+#### 1. Frontend (Nginx) - Despliegue sin estado (Stateless)
+* **Controlador:** `Deployment`.
+* **Justificación:** Nginx no guarda datos persistentes. El uso de un Deployment permite escalar el número de réplicas fácilmente y garantiza que si un Pod falla, el *ReplicaSet* levante uno nuevo inmediatamente.
+* **Exposición (Service):** Se ha utilizado un servicio de tipo `NodePort` para exponer el servidor web hacia el exterior del clúster (Puerto 30080), permitiendo el acceso de los usuarios finales.
+
+#### 2. Backend (Node.js) - Despliegue con estado (Stateful)
+* **Controlador:** `StatefulSet`.
+* **Justificación:** A diferencia del frontend, el backend maneja datos que deben persistir (Requisito Avanzado). Un `StatefulSet` garantiza el orden de despliegue, proporciona una identidad de red estable (resolución DNS consistente) y asegura que cada réplica mantenga su propio almacenamiento persistente.
+* **Exposición (Service):** Se ha configurado un servicio de tipo `ClusterIP`, manteniéndolo accesible únicamente de forma interna para el Nginx, garantizando así la seguridad de la arquitectura.
+
+#### 3. Gestión de la Configuración
+* **Controlador:** `ConfigMap`.
+* **Justificación:** Siguiendo las mejores prácticas, hemos desacoplado la configuración del código creando un `ConfigMap` (`backend-config`). Esto nos permite inyectar variables de entorno (como el puerto o el modo de producción) directamente a los Pods sin tener que reconstruir las imágenes de Docker.
+
+### Estabilidad y Robustez (Nivel Intermedio)
+
+Para evitar que un contenedor defectuoso comprometa todo el nodo o que los usuarios reciban errores durante los arranques, se han implementado políticas estrictas en los manifiestos:
+* **Límites de Recursos (Requests/Limits):** Se han definido `requests` (recursos mínimos garantizados) de 64Mi de RAM y 250m de CPU, y `limits` (recursos máximos permitidos) de 128Mi y 500m. Esto evita el efecto "vecino ruidoso" (noisy neighbor), impidiendo que un solo pod consuma toda la memoria del servidor físico y provoque la caída en cascada de otros servicios.
+* **Health Probes (Sondas de salud):** 
+  * *Liveness Probe:* Comprueba constantemente si la aplicación está "viva". Si el servidor Node.js se bloquea internamente, Kubernetes lo detectará y reiniciará automáticamente el pod.
+  * *Readiness Probe:* Comprueba si la aplicación está lista para recibir tráfico. El balanceador de carga interno no enviará peticiones a un pod hasta que esta prueba sea exitosa, evitando la pérdida de paquetes durante los arranques.
+
+### Persistencia de Datos (Nivel Avanzado)
+
+Los contenedores son efímeros. Para garantizar que los datos del backend sobrevivan a la destrucción, escalado o reinicio de los pods:
+* **PersistentVolumeClaim (PVC):** Dentro del `StatefulSet` del backend, hemos definido un `volumeClaimTemplates` que solicita 1Gi de almacenamiento con modo de acceso `ReadWriteOnce`.
+* **Cómo funciona:** Kubernetes aprovisiona dinámicamente un volumen real (PersistentVolume) en el disco subyacente y lo "ata" a un pod específico. Si el pod `backend-0` es eliminado, Kubernetes lo levanta de nuevo y vuelve a montar exactamente el mismo volumen físico en el directorio `/data`, garantizando que la información se conserve intacta.
+
+### Archivos de la Week 10
+
+Los siguientes ficheros se han creado y pertenecen a la entrega de la Week 10: Orquestación para Producción (Kubernetes):
+
+* `kubernetes/configmap.yaml` - Manifiesto (ConfigMap) que define las variables de entorno globales (`NODE_ENV`, `PORT`) para desacoplarlas de las imágenes.
+* `kubernetes/nginx.yaml` - Manifiesto del Frontend que incluye el controlador `Deployment` (con *probes* y límites de recursos) y el `Service` de tipo NodePort para habilitar el acceso externo.
+* `kubernetes/backend.yaml` - Manifiesto del Backend que incluye el controlador `StatefulSet` (con la petición de volumen persistente dinámico o PVC) y el `Service` de tipo ClusterIP para la comunicación interna segura.

@@ -1,0 +1,83 @@
+services:
+  # SERVICIO 1: FRONTEND (Nginx)
+  nginx:
+    build: ./nginx-app
+    ports:
+      - "${NGINX_PORT}:80"
+    networks:
+      - gsx_network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+      fluentd:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: nginx.access
+
+  # SERVICIO 2: BACKEND (Node.js)
+  backend:
+    build: ./simple-app
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${BACKEND_PORT}
+    networks:
+      - gsx_network
+    restart: always
+    volumes:
+      - backend_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      fluentd:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: backend.app
+
+  # SERVICIO 3: LOGGING COLLECTOR (Fluentd)
+  fluentd:
+    image: fluent/fluentd:v1.16-1
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    networks:
+      - gsx_network
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  gsx_network:
+    driver: bridge
+
+volumes:
+  backend_data:
