@@ -1,0 +1,13 @@
+- name: Build and push Frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./gsx-practica2/nginx-app 
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:${{ github.sha }}
+
+      - name: Build and push Backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./gsx-practica2/simple-app 
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:${{ github.sha }}
