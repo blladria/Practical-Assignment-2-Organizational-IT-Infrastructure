@@ -1,7 +1,7 @@
 services:
   # SERVICIO 1: FRONTEND (Nginx)
   nginx:
-    build: ./nginx-app
+    build: ../nginx-app
     ports:
       - "${NGINX_PORT}:80"
     networks:
@@ -30,7 +30,7 @@ services:
 
   # SERVICIO 2: BACKEND (Node.js)
   backend:
-    build: ./simple-app
+    build: ../simple-app
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${BACKEND_PORT}
