@@ -3,14 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Frontend GreenDevCorp</title>
+    <title>GreenDevCorp - Infraestructura V2</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            margin-top: 50px; 
+            background-color: #f0f4f8;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: inline-block;
+        }
         h1 { color: #2e7d32; }
+        .status {
+            color: #1565c0;
+            font-weight: bold;
+            padding: 10px;
+            border: 2px solid #1565c0;
+            border-radius: 5px;
+            display: inline-block;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
-    <h1>¡Hola desde el Frontend de GreenDevCorp!</h1>
-    <p>El servidor Nginx está funcionando correctamente dentro de su contenedor.</p>
+    <div class="container">
+        <h1>🚀 GreenDevCorp: Despliegue Automatizado</h1>
+        <p>Esta página ha sido desplegada automáticamente mediante <b>GitHub Actions</b> y <b>Terraform</b>.</p>
+        <div class="status">ESTADO: SEMANA 11 - CI/CD FUNCIONANDO</div>
+    </div>
 </body>
 </html>
