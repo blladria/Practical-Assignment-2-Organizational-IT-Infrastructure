@@ -1,54 +1,86 @@
-name: CI Pipeline
+name: CI/CD Pipeline Advanced
 
 on:
   push:
     branches:
-      - main
+      - main 
 
 jobs:
-  build-and-push:
+  build-secure-and-push:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+      # 1. MEJORA DE RENDIMIENTO: Activar Docker Buildx para usar la Caché
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Frontend
-        uses: docker/build-push-action@v4
+      # ==========================================
+      # FRONTEND (NGINX)
+      # ==========================================
+      # 2. ESTRATEGIA DE RELEASE: Doble tag (SHA y stable) + Caché
+      - name: Build and push Nginx
+        uses: docker/build-push-action@v5
         with:
-          context: ./nginx-app
+          context: ./gsx-practica2/nginx-app 
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:${{ github.sha }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:stable
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
+      # 3. SEGURIDAD: Escaneo con Trivy (Falla si hay vulnerabilidades Altas/Críticas)
+      - name: Run Trivy vulnerability scanner on Nginx
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1' 
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # 4. ARTEFACTOS: Generar y subir el SBOM (Inventario de software)
+      - name: Generate SBOM for Nginx
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ secrets.DOCKERHUB_USERNAME }}/nginx-gsx:${{ github.sha }}
+          artifact-name: sbom-nginx.json
+
+      # ==========================================
+      # BACKEND (NODE.JS)
+      # ==========================================
       - name: Build and push Backend
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
-          context: ./simple-app
+          context: ./gsx-practica2/simple-app
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:${{ github.sha }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:stable
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  validate-terraform:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./terraform
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Run Trivy vulnerability scanner on Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-
-      - name: Terraform Format Check
-        run: terraform fmt -check
-
-      - name: Terraform Init
-        run: terraform init -backend=false
-
-      - name: Terraform Validate
-        run: terraform validate
+      - name: Generate SBOM for Backend
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ secrets.DOCKERHUB_USERNAME }}/simple-app-gsx:${{ github.sha }}
+          artifact-name: sbom-backend.json

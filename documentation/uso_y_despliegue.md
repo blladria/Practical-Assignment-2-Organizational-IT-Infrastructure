@@ -503,3 +503,109 @@ kubectl get pods
 kubectl logs <nombre-del-nuevo-pod>
 ```
 *   **¿Por qué `logs`?**: En caso de que el nuevo pod resucitado marque un estado de error (como `CrashLoopBackOff`), este comando extrae la salida estándar (stdout) del contenedor para que puedas investigar por qué la aplicación Node.js o Nginx está fallando internamente.
+
+---
+
+## Week 11: Infraestructura como Código (IaC) y Múltiples Entornos
+
+En esta semana abandonamos el despliegue manual mediante comandos `kubectl` y pasamos a gestionar nuestra infraestructura como código utilizando **Terraform**. Además, implementamos la convivencia de entornos (Desarrollo y Pre-producción) sobre un mismo clúster utilizando **Workspaces**.
+
+### 1. Preparación y Migración a Terraform (Nivel Core)
+
+En lugar de aplicar YAMLs directamente, hemos migrado nuestras definiciones a lenguaje HCL (HashiCorp Configuration Language). Se ha creado el directorio `terraform/` y los siguientes ficheros base:
+
+* **`main.tf`**:
+  * **Qué hace:** Define el bloque de configuración requerido para que Terraform descargue el proveedor oficial de Kubernetes (como si fuera un plugin). Además, contiene la traducción directa de nuestros archivos YAML (`Deployment`, `StatefulSet`, `Services` y `ConfigMap`) a código de Terraform.
+  * **Por qué:** Centraliza la definición de los recursos y automatiza el aprovisionamiento.
+* **`variables.tf`**:
+  * **Qué hace:** Declara un esquema de variables (ej. `var.nginx_tag`, `var.namespace`).
+  * **Por qué:** Para evitar "harcodear" valores como la versión de la imagen Docker o el entorno, permitiéndonos inyectarlos dinámicamente durante el despliegue.
+* **`outputs.tf`**:
+  * **Qué hace:** Imprime información útil en la terminal al finalizar el despliegue.
+  * **Por qué:** Facilita al administrador conocer inmediatamente el puerto asignado o el namespace desplegado sin tener que buscarlo mediante comandos `kubectl`.
+
+---
+
+### 2. Múltiples Entornos (Nivel Intermediate)
+
+Para cumplir con el requerimiento de múltiples entornos sin duplicar código, hemos implementado el aislamiento a nivel de infraestructura y estado.
+
+#### Aislamiento de Red y Configuración
+Se han modificado los recursos en `main.tf` para que el bloque `metadata` utilice la variable de entorno:
+```hcl
+  metadata {
+    name      = "nginx"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
+  }
+```
+* **Por qué:** Esto asegura que los recursos de `dev` se creen dentro del recinto de `dev`, y los de `staging` dentro de `staging`. Además, Terraform crea automáticamente el namespace si no existe mediante el recurso `kubernetes_namespace`.
+
+Se ha configurado el `ConfigMap` del Backend para inyectar dinámicamente la variable de entorno según el entorno desplegado:
+```hcl
+  data = {
+    NODE_ENV = var.namespace == "prod" ? "production" : "development"
+    PORT     = "3000"
+  }
+```
+
+#### Archivos de Variables
+Se han creado dos ficheros específicos para alimentar a Terraform en diferentes escenarios:
+
+* **`dev.tfvars`**:
+  * **Configuración:** `namespace = "dev"`, `node_port = 30080`, `nginx_replicas = 1`.
+  * **Por qué:** Entorno ligero y aislado para pruebas de integración continua.
+* **`staging.tfvars`**:
+  * **Configuración:** `namespace = "staging"`, `node_port = 30081`, `nginx_replicas = 2`.
+  * **Por qué:** Entorno de pre-producción. Se asigna un puerto externo distinto (`30081`) para evitar conflictos en la misma máquina física, y se aumenta el número de réplicas para simular cargas de trabajo más exigentes previas al paso a producción.
+
+---
+
+### 3. Comandos de Despliegue con Workspaces
+
+El mayor reto es que el archivo de estado de Terraform (`terraform.tfstate`) destruiría el entorno previo si aplicáramos una configuración distinta directamente. Para aislar los estados (las "memorias" de Terraform), utilizamos **Workspaces**.
+
+**1. Inicialización de Terraform:**
+```bash
+cd ~/gsx-practica2/terraform/
+terraform init
+```
+* **¿Por qué?**: Descarga e instala los binarios necesarios (el proveedor de Kubernetes configurado en el `main.tf`) en una carpeta oculta `.terraform/`.
+
+**2. Creación y Despliegue del Entorno de Desarrollo (Dev):**
+```bash
+terraform workspace new dev
+terraform apply -var-file="dev.tfvars"
+```
+* **¿Por qué `workspace new`?**: Crea un estado en blanco, paralelo e independiente llamado "dev" y cambia nuestro contexto a él.
+* **¿Por qué `apply -var-file`?**: Ejecuta el plan de infraestructura inyectando explícitamente el archivo con las variables específicas para desarrollo.
+
+**3. Creación y Despliegue del Entorno de Pre-producción (Staging):**
+```bash
+terraform workspace new staging
+terraform apply -var-file="staging.tfvars"
+```
+* **¿Por qué?**: Cambia el contexto de Terraform a una nueva "burbuja" de estado ("staging") y despliega los recursos utilizando las variables que definen 2 réplicas y un puerto alternativo, permitiendo que conviva con el entorno de Dev.
+
+---
+
+### 4. Pruebas y Validación (Testing de Entornos)
+
+Para asegurar que el nivel intermedio se ha implementado correctamente, debemos validar la convivencia de ambos ecosistemas.
+
+**1. Verificar recursos en Desarrollo:**
+```bash
+kubectl get pods -n dev
+```
+* **Resultado esperado:** Muestra 1 pod de Nginx y 1 pod de Backend. (El flag `-n` indica el namespace a consultar).
+
+**2. Verificar recursos en Staging:**
+```bash
+kubectl get pods -n staging
+```
+* **Resultado esperado:** Muestra 2 pods de Nginx y 1 pod de Backend aislados lógicamente.
+
+**3. Comprobación Global Simultánea:**
+```bash
+kubectl get pods -A | grep -E "dev|staging"
+```
+* **¿Por qué?**: Este comando lista todos los pods de todos los namespaces del clúster (`-A`) y los filtra para mostrar únicamente los que pertenezcan a `dev` o `staging`. Demuestra empíricamente la coexistencia pacífica y operativa de múltiples entornos orquestados desde una única base de código fuente.

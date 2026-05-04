@@ -177,3 +177,34 @@ Los siguientes ficheros pertenecen a la entrega de la Week 11: Automatización y
 * `terraform/backend.tf` - Definición del StatefulSet y Service del Backend.
 * `terraform/variables.tf` - Declaración de variables de configuración.
 * `terraform/terraform.tfvars` - Valores de las variables (tags de imágenes y usuario de Docker Hub).
+
+---
+
+## Week 11: Múltiples Entornos y Workspaces (Nivel Intermedio)
+
+### El Problema (Contexto)
+En un ciclo de desarrollo profesional, el código no pasa directamente del ordenador del desarrollador a producción. Necesitábamos una forma de desplegar la infraestructura en diferentes entornos (como Desarrollo y Pre-producción/Staging) usando exactamente el mismo código base, pero sin que los recursos de un entorno sobrescribieran o destruyeran los del otro al desplegarse en el mismo clúster.
+
+### La Solución y Decisiones de Diseño
+Para resolver este reto, hemos implementado el aislamiento de entornos utilizando una combinación de Namespaces de Kubernetes y Workspaces de Terraform.
+
+* **Namespaces Dinámicos:** Hemos modificado todos los recursos en nuestros archivos .tf (main.tf) para que el atributo namespace no sea estático, sino que se inyecte a través de una variable (var.namespace). Además, Terraform se encarga de crear el namespace automáticamente si no existe.
+
+* **Archivos de Variables Independientes:** Hemos separado la configuración creando archivos específicos por entorno:
+  * **dev.tfvars:** Configurado para usar el puerto externo 30080 y levantar 1 sola réplica de Nginx (ahorrando recursos durante el desarrollo).
+  * **staging.tfvars:** Configurado para usar el puerto externo 30081 (evitando colisiones de puertos) y levantar 2 réplicas de Nginx, simulando un entorno más robusto y cercano a producción.
+
+* **Aislamiento del Estado (Workspaces):** El mayor desafío de Terraform es que, por defecto, utiliza un único archivo de estado (terraform.tfstate). Si se aplica una configuración diferente, Terraform destruye lo anterior. Para permitir la convivencia de los entornos, hemos utilizado el comando `terraform workspace`. Esto crea "burbujas" o estados paralelos independientes para dev y staging, permitiendo que ambos ecosistemas operen simultáneamente en el mismo clúster de Minikube sin interferir entre sí.
+
+* **Trazabilidad de Entornos:** Se ha configurado el ConfigMap del backend para que la variable NODE_ENV cambie dinámicamente dependiendo del entorno desplegado, permitiendo a la aplicación saber en qué contexto se está ejecutando.
+
+### Archivos de la Week 11
+
+Los siguientes ficheros pertenecen a la entrega de la Week 11: Automatización, Despliegue (Core) y Múltiples Entornos (Intermediate):
+
+* `.github/workflows/ci.yml` - Pipeline de GitHub Actions para build y push automático.
+* `terraform/main.tf` - Configuración del proveedor, recursos de Kubernetes y namespaces automáticos.
+* `terraform/outputs.tf` - Archivo para mostrar los puertos asignados y el entorno activo tras cada despliegue.
+* `terraform/variables.tf` - Declaración de variables de configuración (incluyendo namespaces, réplicas y puertos dinámicos).
+* `terraform/dev.tfvars` - Valores y configuración específica para el entorno de Desarrollo.
+* `terraform/staging.tfvars` - Valores y configuración específica para el entorno de Pre-producción (Staging).
