@@ -208,3 +208,26 @@ Los siguientes ficheros pertenecen a la entrega de la Week 11: Automatización, 
 * `terraform/variables.tf` - Declaración de variables de configuración (incluyendo namespaces, réplicas y puertos dinámicos).
 * `terraform/dev.tfvars` - Valores y configuración específica para el entorno de Desarrollo.
 * `terraform/staging.tfvars` - Valores y configuración específica para el entorno de Pre-producción (Staging).
+
+---
+
+### CI/CD de Grado Empresarial y Seguridad (Nivel Avanzado)
+
+#### El Problema (Contexto)
+Un pipeline básico que simplemente construye y sube imágenes es insuficiente para un entorno de producción real. Carece de validaciones de seguridad, es lento si reconstruye capas sin cambios, y no proporciona garantías de trazabilidad (qué contiene la imagen) ni estrategias claras de recuperación ante desastres (rollback).
+
+#### La Solución y Decisiones de Diseño
+Hemos evolucionado nuestro flujo de GitHub Actions para convertirlo en un pipeline robusto, seguro y eficiente, cumpliendo con los estándares de DevOps modernos:
+
+* **Escaneo de Seguridad Integrado (Trivy):** Se ha añadido la herramienta *AquaSecurity Trivy* como paso en la integración continua. 
+  * **Decisión:** El pipeline está configurado para analizar vulnerabilidades de severidad `HIGH` o `CRITICAL`. Aunque en un entorno estrictamente bloqueante esto detendría el paso a producción (`exit-code: 1`), se ha validado su funcionamiento detectando vulnerabilidades de fábrica en la imagen base de Alpine, documentando el hallazgo y permitiendo el flujo para la generación posterior de artefactos.
+* **Transparencia en la Cadena de Suministro (SBOM):** Utilizamos *Anchore SBOM Action* para generar automáticamente un *Software Bill of Materials* (Lista de materiales de software) en formato JSON para cada imagen. 
+  * **Decisión:** Estos archivos se generan y se suben como artefactos descargables en la propia ejecución del workflow en GitHub, siendo vitales para futuras auditorías de seguridad y *compliance*.
+* **Optimización de Rendimiento (Caché de Docker Buildx):** Se ha habilitado la caché mediante GitHub Actions (`type=gha`).
+  * **Decisión:** Esto permite al motor de Docker reutilizar las capas compiladas en ejecuciones anteriores, reduciendo drásticamente los tiempos de *build* y ahorrando recursos de cómputo.
+* **Estrategia de Etiquetado (Release/Tag Strategy):** Hemos mejorado la gestión de versiones en nuestro registro.
+  * **Decisión:** Cada imagen validada y subida a Docker Hub recibe dos etiquetas simultáneas:
+    1. El **SHA del commit** de GitHub (`${{ github.sha }}`): Garantiza la inmutabilidad y la trazabilidad exacta de la infraestructura (sabemos qué línea exacta de código generó esa imagen).
+    2. La etiqueta **`stable`**: Sirve como puntero móvil ("latest" controlado) hacia la última versión que superó las pruebas de forma exitosa.
+* **Estrategia de Rollback (Recuperación ante Desastres):** En caso de que un despliegue provoque fallos en el clúster (por ejemplo, al cambiar de imagen o escalar incorrectamente), hemos definido y testeado un procedimiento de marcha atrás instantánea.
+  * **Decisión:** Aprovechamos el historial de despliegues (`ReplicaSets`) nativo de Kubernetes. Utilizando el comando `kubectl rollout undo`, podemos revertir el clúster al estado funcional inmediatamente anterior en cuestión de segundos, garantizando la continuidad del servicio mientras se investiga el fallo en el código.

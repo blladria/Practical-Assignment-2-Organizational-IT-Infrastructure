@@ -609,3 +609,56 @@ kubectl get pods -n staging
 kubectl get pods -A | grep -E "dev|staging"
 ```
 * **¿Por qué?**: Este comando lista todos los pods de todos los namespaces del clúster (`-A`) y los filtra para mostrar únicamente los que pertenezcan a `dev` o `staging`. Demuestra empíricamente la coexistencia pacífica y operativa de múltiples entornos orquestados desde una única base de código fuente.
+
+---
+
+### 5. Operaciones Avanzadas de CI/CD (Nivel Advanced)
+
+En este nivel hemos vitaminado nuestro flujo de trabajo para que no solo despliegue, sino que lo haga de forma segura, auditable y con capacidad de recuperación ante desastres.
+
+#### 5.1. Modificación del Pipeline (Integración Continua)
+Se ha modificado íntegramente el fichero `.github/workflows/ci.yml` para introducir las siguientes mejoras:
+1. **Caché (Docker Buildx):** Se han añadido las directivas `cache-from` y `cache-to` para acelerar la construcción de imágenes reutilizando capas previas.
+2. **Estrategia de Tags:** En lugar de usar la etiqueta por defecto, el flujo ahora inyecta dos etiquetas por cada `push`: el identificador único del commit (`${{ github.sha }}`) y la etiqueta `stable`.
+3. **Escaneo de Seguridad (Trivy):** Se ha integrado el escáner de AquaSecurity para analizar vulnerabilidades del SO y librerías en las imágenes generadas. *(Nota operativa: Para permitir que el pipeline finalice en verde en este entorno de prácticas pese a las vulnerabilidades de la imagen base de Alpine, se ha configurado temporalmente con `exit-code: '0'`)*.
+4. **Generación de SBOM (Anchore):** Se ha integrado un paso para extraer el inventario de software en formato JSON.
+
+**Comandos para desplegar el nuevo pipeline:**
+```bash
+git add .github/workflows/ci.yml
+git commit -m "feat: pipeline CI/CD avanzado con seguridad, cache y SBOM"
+git push
+```
+
+#### 5.2. Pruebas de Seguridad y Extracción de Artefactos
+Para validar que el pipeline avanzado funciona correctamente:
+1. Acceder a la interfaz web del repositorio en GitHub.
+2. Navegar a la pestaña **Actions** y abrir la última ejecución exitosa del flujo.
+3. **Comprobación Trivy:** Al desplegar los logs del paso *"Run Trivy vulnerability scanner"*, se visualiza una tabla detallada con los CVEs detectados en la imagen (ej. vulnerabilidades en librerías de Alpine).
+4. **Comprobación SBOM:** En la vista general (*Summary*) de la ejecución, en la parte inferior, aparece la sección **Artifacts** con los archivos `sbom-nginx.json` y `sbom-backend.json` listos para ser descargados y auditados.
+
+#### 5.3. Procedimiento de Rollback en Kubernetes (Despliegue Continuo)
+Se ha definido y probado un procedimiento de marcha atrás de emergencia (Rollback) para recuperar la disponibilidad del servicio de forma inmediata ante un despliegue defectuoso, aprovechando el historial de los `ReplicaSets`.
+
+**Prueba realizada paso a paso (Entorno Dev):**
+
+1. **Seleccionar el espacio de trabajo:**
+   ```bash
+   terraform workspace select dev
+   ```
+2. **Generar un cambio en el historial:** 
+   Se modificó el archivo `dev.tfvars` cambiando la etiqueta de la imagen (`nginx_tag = "stable"`) simulando el despliegue de una nueva versión.
+3. **Aplicar el despliegue:**
+   ```bash
+   terraform apply -var-file="dev.tfvars"
+   ```
+4. **Ejecutar el Rollback (Botón del pánico):**
+   Ante la suposición de un fallo crítico en la nueva versión `stable`, se ordenó a Kubernetes revertir instantáneamente a la configuración de la versión anterior:
+   ```bash
+   kubectl rollout undo deployment/nginx -n dev
+   ```
+5. **Verificación de la recuperación:**
+   ```bash
+   kubectl get pods -n dev
+   ```
+   *Resultado:* Kubernetes destruyó automáticamente el Pod de la versión defectuosa y levantó uno nuevo utilizando la versión de la imagen inmediatamente anterior registrada en su historial, recuperando el sistema en apenas 7 segundos y sin necesidad de ejecutar Terraform.
