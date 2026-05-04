@@ -144,3 +144,36 @@ Los siguientes ficheros se han creado y pertenecen a la entrega de la Week 10: O
 * `kubernetes/configmap.yaml` - Manifiesto (ConfigMap) que define las variables de entorno globales (`NODE_ENV`, `PORT`) para desacoplarlas de las imágenes.
 * `kubernetes/nginx.yaml` - Manifiesto del Frontend que incluye el controlador `Deployment` (con *probes* y límites de recursos) y el `Service` de tipo NodePort para habilitar el acceso externo.
 * `kubernetes/backend.yaml` - Manifiesto del Backend que incluye el controlador `StatefulSet` (con la petición de volumen persistente dinámico o PVC) y el `Service` de tipo ClusterIP para la comunicación interna segura.
+
+---
+
+## Week 11: Infraestructura como Código (IaC) y CI/CD (Core)
+
+### El Problema (Contexto)
+Aunque Kubernetes aporta resiliencia, aplicar manifiestos manualmente mediante comandos kubectl no es escalable ni permite llevar un registro de cambios. Además, construir y subir imágenes de Docker desde el entorno local genera inconsistencias. Necesitábamos automatizar el ciclo de vida de la infraestructura y el despliegue.
+
+### La Solución
+Hemos implementado Terraform como herramienta de Infraestructura como Código (IaC) para gestionar los recursos del clúster de forma declarativa. Complementariamente, hemos configurado un pipeline de Integración Continua (CI) con GitHub Actions que automatiza la construcción y el almacenamiento de imágenes en Docker Hub.
+
+### Decisiones de Diseño por Componente
+
+#### 1. Gestión de Infraestructura (Terraform)
+* **Control del Estado:** Se ha migrado la configuración de Kubernetes a archivos .tf, permitiendo que Terraform gestione el ciclo de vida de los Pods y Servicios.
+* **Desacoplamiento mediante Variables:** Se utiliza un archivo terraform.tfvars para definir los tags de las imágenes. Esto permite actualizar la versión de la aplicación sin modificar el código base de la infraestructura.
+* **Automatización de Red:** Terraform gestiona la creación de servicios NodePort para el frontend y ClusterIP para el backend, asegurando que la conectividad sea reproducible.
+
+#### 2. Automatización de Imágenes (GitHub Actions)
+* **Pipeline de CI:** Al realizar un git push, el flujo de trabajo construye automáticamente las imágenes de Nginx y Node.js.
+* **Etiquetado Inmutable:** Cada imagen se etiqueta con el SHA del commit de GitHub (un identificador único de 40 caracteres). Esto garantiza que siempre sepamos exactamente qué versión del código está ejecutándose en el clúster.
+* **Registro Centralizado:** Las imágenes se suben automáticamente a Docker Hub, sirviendo como repositorio central de artefactos para el despliegue.
+
+### Archivos de la Week 11
+
+Los siguientes ficheros pertenecen a la entrega de la Week 11: Automatización y Despliegue (Core):
+
+* `.github/workflows/ci.yml` - Pipeline de GitHub Actions para build y push automático.
+* `terraform/main.tf` - Configuración del proveedor de Kubernetes.
+* `terraform/nginx.tf` - Definición del Deployment y Service del Frontend.
+* `terraform/backend.tf` - Definición del StatefulSet y Service del Backend.
+* `terraform/variables.tf` - Declaración de variables de configuración.
+* `terraform/terraform.tfvars` - Valores de las variables (tags de imágenes y usuario de Docker Hub).

@@ -7,18 +7,25 @@ terraform {
   }
 }
 
-# Configuramos el proveedor para que hable con tu Minikube local
 provider "kubernetes" {
   config_path = "~/.kube/config"
+}
+
+# 0. Creación automática del Namespace
+resource "kubernetes_namespace" "env_namespace" {
+  metadata {
+    name = var.namespace
+  }
 }
 
 # 1. ConfigMap
 resource "kubernetes_config_map" "backend_config" {
   metadata {
-    name = "backend-config"
+    name      = "backend-config"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
   }
   data = {
-    NODE_ENV = "production"
+    NODE_ENV = var.namespace == "prod" ? "production" : "development"
     PORT     = "3000"
   }
 }
@@ -26,7 +33,8 @@ resource "kubernetes_config_map" "backend_config" {
 # 2. Service Backend (ClusterIP)
 resource "kubernetes_service" "backend" {
   metadata {
-    name = "backend"
+    name      = "backend"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
   }
   spec {
     selector = {
@@ -43,7 +51,8 @@ resource "kubernetes_service" "backend" {
 # 3. StatefulSet Backend
 resource "kubernetes_stateful_set" "backend" {
   metadata {
-    name = "backend"
+    name      = "backend"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
   }
   spec {
     service_name = "backend"
@@ -97,7 +106,8 @@ resource "kubernetes_stateful_set" "backend" {
 # 4. Service Nginx (NodePort)
 resource "kubernetes_service" "nginx_service" {
   metadata {
-    name = "nginx-service"
+    name      = "nginx-service"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
   }
   spec {
     selector = {
@@ -106,7 +116,7 @@ resource "kubernetes_service" "nginx_service" {
     port {
       port        = 80
       target_port = 80
-      node_port   = 30080
+      node_port   = var.node_port
     }
     type = "NodePort"
   }
@@ -115,10 +125,11 @@ resource "kubernetes_service" "nginx_service" {
 # 5. Deployment Nginx
 resource "kubernetes_deployment" "nginx" {
   metadata {
-    name = "nginx"
+    name      = "nginx"
+    namespace = kubernetes_namespace.env_namespace.metadata[0].name
   }
   spec {
-    replicas = 1
+    replicas = var.nginx_replicas
     selector {
       match_labels = {
         app = "nginx"
