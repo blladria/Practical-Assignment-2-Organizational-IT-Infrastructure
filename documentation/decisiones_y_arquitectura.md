@@ -231,3 +231,83 @@ Hemos evolucionado nuestro flujo de GitHub Actions para convertirlo en un pipeli
     2. La etiqueta **`stable`**: Sirve como puntero móvil ("latest" controlado) hacia la última versión que superó las pruebas de forma exitosa.
 * **Estrategia de Rollback (Recuperación ante Desastres):** En caso de que un despliegue provoque fallos en el clúster (por ejemplo, al cambiar de imagen o escalar incorrectamente), hemos definido y testeado un procedimiento de marcha atrás instantánea.
   * **Decisión:** Aprovechamos el historial de despliegues (`ReplicaSets`) nativo de Kubernetes. Utilizando el comando `kubectl rollout undo`, podemos revertir el clúster al estado funcional inmediatamente anterior en cuestión de segundos, garantizando la continuidad del servicio mientras se investiga el fallo en el código.
+
+---
+
+## Week 12: Network Architecture & Security (Core)
+
+### 1. Diagrama de Arquitectura de Red (Network Architecture Diagram)
+Para visualizar la separación lógica de nuestra infraestructura, hemos diseñado una arquitectura basada en capas y entornos aislados.
+
+```mermaid
+graph TD
+    %% Definición de conexiones externas
+    Internet((Internet / Usuarios))
+    Partners((External Partners))
+
+    %% Entorno de Producción
+    subgraph Prod [Production Environment 10.0.3.0/24]
+        subgraph Prod_DMZ [DMZ Segment]
+            Nginx_Prod[Frontend Nginx]
+        end
+        subgraph Prod_Int [Internal Segment]
+            Node_Prod[Backend Node.js]
+        end
+        subgraph Prod_DB [Database Segment]
+            DB_Prod[(Database)]
+        end
+        Nginx_Prod -->|Allowed| Node_Prod
+        Node_Prod -->|Allowed| DB_Prod
+    end
+
+    %% Entorno de Desarrollo
+    subgraph Dev [Development Environment 10.0.1.0/24]
+        subgraph Dev_DMZ [DMZ Segment]
+            Nginx_Dev[Frontend Nginx]
+        end
+        subgraph Dev_Int [Internal Segment]
+            Node_Dev[Backend Node.js]
+        end
+        Nginx_Dev -->|Allowed| Node_Dev
+    end
+
+    %% Conexiones y Fronteras
+    Internet -->|HTTP 80/443| Prod_DMZ
+    Internet -->|HTTP 80/443| Dev_DMZ
+    Partners -.->|VPN/API| Prod_DMZ
+
+    %% Reglas de bloqueo explícitas (Estilo visual)
+    classDef blocked stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5;
+    Prod_Int -.-x|BLOCKED: Cross-Environment| Dev_Int
+    Internet -.-x|BLOCKED: Direct Access| Prod_Int
+    Internet -.-x|BLOCKED: Direct Access| Prod_DB
+```
+
+### 2. Planificación de Direccionamiento IP (IP Addressing Plan)
+Para la organización GreenDevCorp, hemos reservado un bloque CIDR amplio (10.0.0.0/16), lo que nos proporciona 65,536 direcciones IP privadas. Este bloque se ha subdividido en subredes /24 para facilitar el enrutamiento, aislar dominios de broadcast y aplicar listas de control de acceso (ACLs) perimetrales.
+
+**Organización global:** 10.0.0.0/16
+
+**Subdivisiones:**
+
+- **10.0.1.0/24** -> Development (Dev): 254 IPs usables. Aloja los pods efímeros, servicios y recursos de pruebas de los desarrolladores.
+- **10.0.2.0/24** -> Staging (Pre-producción): 254 IPs usables. Entorno clonado de producción para pruebas de integración finales.
+- **10.0.3.0/24** -> Production (Prod): 254 IPs usables. Aloja el tráfico real de usuarios. Separarlo evita que un error en el código de desarrollo consuma IPs o sature la red de producción.
+- **10.0.10.0/24** -> External Partners: 254 IPs usables. Subred dedicada a conexiones VPN o integraciones API de terceros.
+
+**Justificación de la subdivisión:** Un bloque /24 (256 direcciones, 254 asignables) es el tamaño ideal para entornos de contenedores pequeños/medianos por nodo. Permite escalar hasta más de 200 pods por entorno sin desperdiciar masivamente el bloque principal /16. Si un entorno necesitara más escala en el futuro, se le asignaría un bloque /23.
+
+### 3. Fronteras de Seguridad (Security Boundaries)
+Para garantizar el principio de privilegio mínimo (Zero Trust), se ha configurado la red del clúster bajo las siguientes directivas:
+
+#### ¿Qué tráfico está permitido?
+- El tráfico de Internet solo puede alcanzar la capa de presentación (DMZ) donde reside el Frontend (Nginx).
+- El Frontend tiene permisos estrictos para comunicarse por el puerto 3000 con el Backend dentro de su mismo entorno.
+
+#### ¿Qué tráfico está bloqueado y por qué?
+- **Acceso directo al Backend/DB:** Bloqueado desde el exterior. El backend y la base de datos no tienen IPs públicas ni servicios NodePort. Esto evita ataques directos de explotación de vulnerabilidades.
+- **Tráfico Cross-Environment (Cross-Namespace):** Bloqueado. Un pod comprometido en la red de Desarrollo (10.0.1.0/24) no puede escanear ni conectarse a un pod en Producción (10.0.3.0/24). Esto contiene las brechas de seguridad (blast radius).
+
+#### ¿Cómo prevenimos desconfiguraciones accidentales?
+- **Utilizando Infraestructura como Código (Terraform):** Las políticas de red están declaradas en el código (network-policies.tf); nadie aplica reglas manualmente en el servidor.
+- **Implementando una directiva Default-Deny:** La primera regla de red deniega todo el tráfico entrante al namespace. Luego, se abren explícitamente solo los puertos necesarios (Frontend -> Backend). Si a alguien se le olvida proteger un nuevo microservicio, nacerá totalmente aislado y sin red por defecto.

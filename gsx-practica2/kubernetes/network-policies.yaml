@@ -1,0 +1,37 @@
+---
+# 1. Production pods cannot access development pods y viceversa
+# Aplicada en el namespace "prod", deniega todo el tráfico que venga del namespace "dev"
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-dev-to-prod
+  namespace: prod
+spec:
+  podSelector: {} # Aplica a TODOS los pods en "prod"
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: staging # Permitimos staging si queremos
+    # NO incluimos "dev", por lo que queda bloqueado implícitamente
+---
+# 2. External pods cannot reach internal database
+# Aplicada en el namespace "db", deniega el tráfico de pods con etiqueta "tier: external"
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: protect-internal-db
+  namespace: db
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: internal # Solo permitimos pods internal, el backend
