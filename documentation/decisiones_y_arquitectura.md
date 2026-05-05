@@ -384,3 +384,9 @@ Dado que GreenDevCorp es una empresa en crecimiento con **20+ empleados** y que 
 **Trade-offs (Compromisos):**
 * **Dependencia (Vendor Lock-in):** La empresa pasará a depender económicamente de un proveedor en la nube y de suscripciones recurrentes (pago por usuario/mes).
 * **Disponibilidad:** Si la conexión a Internet de la oficina falla (o el proveedor cloud sufre una caída), los empleados podrían experimentar problemas para autenticarse en servicios locales (aunque esto se mitiga con cachés de credenciales locales en los portátiles).
+
+**Additional Considerations:**
+* **Data Sovereignty:** GreenDevCorp should consider the implications of storing sensitive user data in a cloud-based IAM solution, ensuring compliance with relevant data protection regulations.
+* **Customization and Integration:** The chosen Cloud IAM solution should be able to integrate with existing systems and workflows, allowing for customization to meet specific business needs.
+
+---

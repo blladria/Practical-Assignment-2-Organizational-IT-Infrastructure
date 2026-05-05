@@ -662,3 +662,104 @@ Se ha definido y probado un procedimiento de marcha atrás de emergencia (Rollba
    kubectl get pods -n dev
    ```
    *Resultado:* Kubernetes destruyó automáticamente el Pod de la versión defectuosa y levantó uno nuevo utilizando la versión de la imagen inmediatamente anterior registrada en su historial, recuperando el sistema en apenas 7 segundos y sin necesidad de ejecutar Terraform.
+
+---
+
+## Week 12: Network Architecture & Security (Core)
+
+En esta semana hemos implementado la seguridad de red (Firewalling) dentro del clúster. Para ello, hemos activado un motor de red avanzado (Calico) y hemos definido reglas de aislamiento mediante Infraestructura como Código (IaC).
+
+### 1. Preparación del Clúster (Activar Motor de Red)
+
+Por defecto, Kubernetes no aplica restricciones de red. Para que las políticas funcionen, debemos reconstruir el clúster habilitando un **CNI (Container Network Interface)** que soporte NetworkPolicies, como **Calico**.
+
+**Comandos de preparación:**
+```bash
+# 1. Borrar el clúster previo sin soporte de red avanzado
+minikube delete
+
+# 2. Iniciar Minikube con Calico activado y recursos suficientes
+minikube start --cni=calico --memory=4096 --cpus=2
+```
+* **¿Por qué `--cni=calico`?**: Es el componente encargado de interceptar el tráfico entre pods y aplicar las reglas de filtrado que definiremos.
+* **¿Por qué `--memory=4096`?**: Calico es un servicio persistente que consume recursos adicionales para monitorizar la red en tiempo real.
+
+**Verificación del motor de red:**
+```bash
+kubectl get pods -n kube-system | grep calico
+```
+* **Resultado esperado:** Los pods `calico-node` y `calico-kube-controllers` deben estar en estado `Running`.
+
+---
+
+### 2. Definición del Firewall (Archivo `network_policies.tf`)
+
+Se ha creado un nuevo fichero en la carpeta `terraform/` que automatiza la seguridad del clúster:
+
+* **`network_policies.tf`**:
+  * **Contenido:** Define dos recursos `kubernetes_network_policy`.
+  * **Lógica "Deny All" (Aislamiento):** La primera regla bloquea todo el tráfico que intenta entrar en el Namespace desde el exterior o desde otros Namespaces.
+  * **Lógica "Allow Internal":** Permite que los pods hablen entre sí solo si pertenecen al mismo entorno (Dev con Dev, Staging con Staging).
+  * **Excepción de Entrada:** Permite tráfico desde `0.0.0.0/0` (Internet) únicamente hacia los pods con la etiqueta `app=nginx` en el puerto 80.
+
+---
+
+### 3. Despliegue de la Seguridad con Terraform
+
+Aplicamos las reglas en nuestros entornos de trabajo habituales.
+
+```bash
+cd ~/gsx-practica2/terraform/
+
+# Aplicar seguridad en Desarrollo
+terraform workspace select dev
+terraform apply -var-file="dev.tfvars" -auto-approve
+
+# Aplicar seguridad en Staging
+terraform workspace select staging
+terraform apply -var-file="staging.tfvars" -auto-approve
+```
+
+**Verificación de despliegue:**
+```bash
+kubectl get networkpolicies -A
+```
+* **¿Por qué?**: Confirma que las reglas `namespace-isolation-policy` y `allow-external-to-frontend` están creadas y activas en ambos namespaces.
+
+---
+
+### 4. Protocolo de Pruebas de Penetración (Testing)
+
+Para validar que la red está protegida, simulamos un ataque desde dentro del clúster.
+
+**Paso 1: Entrar en el Pod "Hacker" (Nginx de Dev)**
+```bash
+# Obtener el nombre del pod de nginx en dev
+POD_NAME=$(kubectl get pods -n dev -l app=nginx -o jsonpath="{.items[0].metadata.name}")
+
+# Entrar al contenedor
+kubectl exec -it $POD_NAME -n dev -- bash
+```
+
+**Paso 2: Prueba de Conectividad Interna (Permitida)**
+```bash
+curl http://backend:3000 --connect-timeout 5
+```
+* **¿Por qué?**: Valida que la política permite el tráfico legítimo entre el Frontend y el Backend del mismo entorno. Debe responder "Hello from container".
+
+**Paso 3: Prueba de Ataque Cruzado (Bloqueada)**
+Intentamos atacar al backend de **Staging** desde el entorno de **Dev**.
+```bash
+curl http://backend.staging.svc.cluster.local:3000 --connect-timeout 5
+```
+* **Resultado esperado:** `curl: (28) Connection timed out after 5001 milliseconds`.
+* **¿Por qué?**: Esto demuestra que, aunque el servicio de Staging es visible por DNS, la **NetworkPolicy** intercepta los paquetes y los descarta, protegiendo los datos de pre-producción del entorno de desarrollo.
+
+---
+
+### 5. Archivos de la Week 12
+
+Los siguientes ficheros pertenecen a la entrega de la Week 12: Network Architecture & Security (Core):
+
+* `terraform/network_policies.tf` - Código HCL para la gestión de políticas de seguridad.
+* `decisiones_y_arquitectura.md` - Documentación de diseño de red y servicios core (DNS, DHCP, NTP).
