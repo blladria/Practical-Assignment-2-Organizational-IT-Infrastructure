@@ -236,53 +236,42 @@ Hemos evolucionado nuestro flujo de GitHub Actions para convertirlo en un pipeli
 
 ## Week 12: Network Architecture & Security (Core)
 
-### 1. Diagrama de Arquitectura de Red (Network Architecture Diagram)
-Para visualizar la separación lógica de nuestra infraestructura, hemos diseñado una arquitectura basada en capas y entornos aislados.
+### 1. Diagrama de Arquitectura de Red (Segmentación)
 
-```mermaid
-graph TD
-    %% Definición de conexiones externas
-    Internet((Internet / Usuarios))
-    Partners((External Partners))
+El siguiente diagrama ilustra la separación lógica de nuestra infraestructura, aislando los entornos y delimitando la DMZ de las bases de datos internas mediante NetworkPolicies.
 
-    %% Entorno de Producción
-    subgraph Prod [Production Environment 10.0.3.0/24]
-        subgraph Prod_DMZ [DMZ Segment]
-            Nginx_Prod[Frontend Nginx]
-        end
-        subgraph Prod_Int [Internal Segment]
-            Node_Prod[Backend Node.js]
-        end
-        subgraph Prod_DB [Database Segment]
-            DB_Prod[(Database)]
-        end
-        Nginx_Prod -->|Allowed| Node_Prod
-        Node_Prod -->|Allowed| DB_Prod
-    end
+```text
+                           [ Internet ]                        [ External Partners ]
+                                 |                                 (10.0.10.0/24)
+                                 | (Puertos 80/443)                      |
+                                 v                                       v (VPN/API)
+=========================================================================================
+[ DMZ Segment (Expuesto) ]
 
-    %% Entorno de Desarrollo
-    subgraph Dev [Development Environment 10.0.1.0/24]
-        subgraph Dev_DMZ [DMZ Segment]
-            Nginx_Dev[Frontend Nginx]
-        end
-        subgraph Dev_Int [Internal Segment]
-            Node_Dev[Backend Node.js]
-        end
-        Nginx_Dev -->|Allowed| Node_Dev
-    end
+         +-----------------+   +-----------------+   +-----------------+
+         | Frontend Dev    |   | Frontend Stg    |   | Frontend Prod   |
+         | (10.0.1.0/24)   |   | (10.0.2.0/24)   |   | (10.0.3.0/24)   |
+         +-----------------+   +-----------------+   +-----------------+
+                  |                     |                     |
+      (Permitido) |         (Permitido) |         (Permitido) |
+                  v                     v                     v
+=========================================================================================
+[ Internal Segment (Protegido) ]
 
-    %% Conexiones y Fronteras
-    Internet -->|HTTP 80/443| Prod_DMZ
-    Internet -->|HTTP 80/443| Dev_DMZ
-    Partners -.->|VPN/API| Prod_DMZ
-
-    %% Reglas de bloqueo explícitas (Estilo visual)
-    classDef blocked stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5;
-    Prod_Int -.-x|BLOCKED: Cross-Environment| Dev_Int
-    Internet -.-x|BLOCKED: Direct Access| Prod_Int
-    Internet -.-x|BLOCKED: Direct Access| Prod_DB
+         +-----------------+   +-----------------+   +-----------------+
+         | Backend Dev     |   | Backend Stg     |   | Backend Prod    | <---- [ APIs ]
+         | (10.0.1.0/24)   |   | (10.0.2.0/24)   |   | (10.0.3.0/24)   |
+         +-----------------+   +-----------------+   +-----------------+
+                  |                     |                     |
+                  +---X (Bloqueado) X---+---X (Bloqueado) X---+
+                            (Cross-Environment Denied)        | (Permitido)
+                                                              v
+=========================================================================================
+[ Database Segment (Altamente Restringido) ]
+                                                              
+                                                       [( Database Prod )]
+                                                       [( 10.0.3.0/24   )]
 ```
-
 ### 2. Planificación de Direccionamiento IP (IP Addressing Plan)
 Para la organización GreenDevCorp, hemos reservado un bloque CIDR amplio (10.0.0.0/16), lo que nos proporciona 65,536 direcciones IP privadas. Este bloque se ha subdividido en subredes /24 para facilitar el enrutamiento, aislar dominios de broadcast y aplicar listas de control de acceso (ACLs) perimetrales.
 
@@ -311,3 +300,87 @@ Para garantizar el principio de privilegio mínimo (Zero Trust), se ha configura
 #### ¿Cómo prevenimos desconfiguraciones accidentales?
 - **Utilizando Infraestructura como Código (Terraform):** Las políticas de red están declaradas en el código (network-policies.tf); nadie aplica reglas manualmente en el servidor.
 - **Implementando una directiva Default-Deny:** La primera regla de red deniega todo el tráfico entrante al namespace. Luego, se abren explícitamente solo los puertos necesarios (Frontend -> Backend). Si a alguien se le olvida proteger un nuevo microservicio, nacerá totalmente aislado y sin red por defecto.
+
+---
+
+## Week 12: Core Services & Identity Management Research
+
+### 1. Core Network Services
+
+#### 1.1. DNS (Domain Name System)
+**¿Qué es y qué problema resuelve?**
+DNS es un sistema de nomenclatura jerárquico y descentralizado. Su propósito principal es traducir (resolver) nombres de dominio legibles por humanos (ej. `www.greendevcorp.com`) en direcciones IP numéricas (ej. `192.168.1.50`) que las máquinas utilizan para comunicarse. Resuelve el problema de tener que memorizar direcciones IP y permite que las IPs cambien por debajo sin afectar el nombre con el que se accede al servicio.
+
+**¿Por qué una organización necesita DNS?**
+Una empresa lo necesita tanto a nivel externo (para que sus clientes encuentren su web o sus APIs) como a nivel interno. En la red interna, el DNS permite que los servicios se descubran entre sí (Service Discovery), algo vital en Kubernetes (donde los Pods cambian de IP constantemente) y en sistemas como Active Directory.
+
+**¿Cómo funciona (Alto nivel)?**
+Cuando un usuario teclea una URL, su ordenador consulta a un servidor DNS local (Resolver). Si este no tiene la respuesta en caché, consulta a la raíz de internet (Root Servers), luego a los servidores de dominio de nivel superior (TLD, ej. `.com`), y finalmente al servidor autoritativo que tiene el registro exacto de la IP. Una vez obtenida, se la devuelve al usuario y la guarda en caché.
+
+**Explicación para una persona no técnica:**
+> Piensa en el DNS como si fuera la agenda de contactos de tu teléfono móvil. A las personas no se nos da bien memorizar decenas de números de teléfono de 9 cifras, así que guardamos un nombre como "Mamá" o "Taller". 
+> Cuando quieres llamar, buscas el nombre y el teléfono marca el número por ti automáticamente. El DNS hace exactamente eso en Internet: tú escribes "google.com" (el nombre) y el DNS busca en su enorme libreta cuál es su "número de teléfono" (la dirección IP) para poder conectar tu ordenador con el de ellos.
+
+#### 1.2. DHCP (Dynamic Host Configuration Protocol)
+**¿Qué es y qué problema resuelve?**
+DHCP es un protocolo de red cliente/servidor que asigna dinámicamente direcciones IP y otros parámetros de configuración de red (como la máscara de subred, la puerta de enlace y los servidores DNS) a cada dispositivo que se conecta a una red. Resuelve el problema de la configuración manual (IPs estáticas), previniendo conflictos de IP duplicadas y ahorrando incontables horas de administración.
+
+**¿Por qué lo usaría una organización?**
+Porque en una red moderna, los dispositivos entran y salen constantemente (portátiles, móviles, máquinas virtuales, pods). Asignar IPs manualmente sería un caos administrativo y propenso a errores humanos.
+
+**¿Cómo funciona (Alto nivel)?**
+Utiliza un proceso llamado DORA (Discover, Offer, Request, Acknowledge):
+1. **D**iscover: El cliente entra a la red y grita "¿Hay algún servidor DHCP aquí?".
+2. **O**ffer: El servidor DHCP responde "Sí, te ofrezco esta IP".
+3. **R**equest: El cliente dice "Perfecto, me la quedo, regístrala".
+4. **A**cknowledge: El servidor confirma "Hecho, es tuya por un tiempo determinado (Lease)".
+
+**Explicación para una persona no técnica:**
+> Imagina que llegas a un gran hotel. No puedes simplemente entrar y meterte en la habitación que más te guste, porque podrías meterte en la cama de otra persona (conflicto de IP). El DHCP es el recepcionista del hotel: cuando llegas a la puerta, le pides una habitación, y él revisa qué habitaciones están libres y te entrega la llave de una por el tiempo que dure tu estancia. Así se asegura de que todo el mundo tenga su propio espacio sin chocarse con los demás.
+
+#### 1.3. NTP (Network Time Protocol)
+**¿Qué es y por qué importa la sincronización?**
+NTP es un protocolo diseñado para sincronizar los relojes de los ordenadores a través de una red de datos, con una precisión de milisegundos respecto al Tiempo Universal Coordinado (UTC). 
+
+**Importancia para seguridad y operaciones:**
+* **Seguridad (Criptografía):** Los certificados SSL/TLS y tokens de seguridad tienen fechas de caducidad y de inicio de validez estrictas. Si el reloj de un servidor está atrasado, rechazará conexiones válidas o aceptará certificados caducados. Protocolos de identidad como Kerberos fallan automáticamente si hay más de 5 minutos de diferencia entre el cliente y el servidor para evitar ataques de repetición (Replay Attacks).
+* **Operaciones (Auditoría):** Si ocurre un ciberataque o un fallo en el sistema, los ingenieros miran los *logs* (registros). Si el Servidor A y el Servidor B tienen horas distintas, es imposible reconstruir la línea temporal para saber qué ocurrió primero.
+
+**Explicación para una persona no técnica:**
+> El NTP es como el director de una orquesta sinfónica. Si tienes 100 músicos (ordenadores), no importa lo buenos que sean; si cada uno empieza a tocar con un segundo de diferencia basándose en su propio reloj, el resultado será un ruido espantoso. El NTP se asegura de que todos los ordenadores del mundo miren al mismo reloj maestro y "tic-taqueen" exactamente en el mismo milisegundo. Esto es crítico porque si el banco registra que sacaste dinero a las 12:05, y el cajero automático dice que te lo dio a las 12:00, las cuentas de seguridad no cuadrarán y bloquearán la operación.
+
+---
+
+### 2. Identity Management
+
+#### 2.1. Authentication vs. Authorization
+**Authentication (Autenticación - *Identidad*):**
+La autenticación responde a la pregunta **"¿Quién eres?"**. Es el proceso mediante el cual un sistema verifica que una persona o servicio es quien dice ser. Se logra comprobando factores como algo que el usuario sabe (una contraseña), algo que tiene (un teléfono para recibir un SMS o token) o algo que es (huella dactilar o FaceID).
+
+**Authorization (Autorización - *Permisos*):**
+La autorización responde a la pregunta **"¿Qué puedes hacer?"**. Ocurre *después* de la autenticación. Es el proceso de determinar si la identidad confirmada tiene los permisos o privilegios necesarios para acceder a un recurso específico, como leer un archivo, entrar a un servidor o modificar una base de datos. Se suele gestionar mediante control de acceso basado en roles (RBAC).
+
+#### 2.2. Centralized Identity (Identidad Centralizada)
+* **LDAP:** Es un protocolo abierto utilizado para interactuar con servicios de directorio (una base de datos optimizada para lecturas rápidas). Permite buscar información sobre usuarios, grupos y permisos en una red.
+* **Active Directory (AD):** Es el servicio de directorio propietario de Microsoft. Actúa como el "cerebro" de una red empresarial, utilizando LDAP para consultas, Kerberos para autenticación y DNS para localizar recursos.
+* **SSO (Single Sign-On):** Permite a un usuario iniciar sesión *una sola vez* con un solo usuario y contraseña, y obtener acceso a múltiples aplicaciones independientes de forma automática. Importa porque reduce la fatiga de contraseñas (evita que los empleados apunten contraseñas en post-its) y facilita dar de baja a un empleado en un solo clic.
+
+**¿Qué problema resuelve la identidad centralizada?**
+Elimina las cuentas "locales". Sin identidad centralizada, un empleado necesitaría una cuenta distinta creada manualmente en su PC, en el servidor de correo, en el software de RRHH y en la base de datos de código. La identidad centralizada proporciona una "Única Fuente de Verdad" (Single Source of Truth) para altas, bajas y permisos.
+
+**Necesidades por tamaño de empresa:**
+* **Empresa Pequeña (1-15 personas):** A menudo sobreviven con cuentas locales o gestionando la identidad a través de un servicio en la nube sencillo (como las cuentas de Google Workspace). No necesitan la complejidad de un AD on-premise.
+* **Empresa Grande (100+ personas):** Es obligatoria una solución IAM (Identity and Access Management) robusta (como Active Directory o Entra ID) para cumplir con normativas de seguridad, auditorías y gestionar eficientemente el alto volumen de rotación de personal.
+
+#### 2.3. Identity Strategy para GreenDevCorp
+**Análisis y Recomendación:**
+Dado que GreenDevCorp es una empresa en crecimiento con **20+ empleados** y que hace un uso intensivo de tecnologías modernas (Kubernetes, contenedores, nubes públicas), **la recomendación es adoptar un Identity Provider (IdP) basado en la nube (Cloud IAM)**, como *Microsoft Entra ID*, *Okta* o *Google Workspace Cloud Identity*, evitando montar un servidor tradicional de Active Directory local (On-Premise).
+
+**Razonamiento:**
+1. **Cero Mantenimiento de Infraestructura:** Con ~20 empleados, no hay justificación económica ni técnica para destinar a un ingeniero a mantener servidores físicos de Active Directory, parchearlos y hacerles copias de seguridad.
+2. **Integración Moderna (SSO y MFA):** Las soluciones Cloud IAM incluyen Single Sign-On mediante protocolos modernos (OIDC, SAML), lo que permite a los desarrolladores hacer login único para acceder a GitHub, Kubernetes, VPNs y herramientas de CI/CD. Además, el Autenticador Multifactor (MFA) viene configurado por defecto.
+3. **Trabajo Remoto:** No requiere que los empleados estén conectados a una red local o VPN tradicional simplemente para validar sus credenciales contra un controlador de dominio.
+
+**Trade-offs (Compromisos):**
+* **Dependencia (Vendor Lock-in):** La empresa pasará a depender económicamente de un proveedor en la nube y de suscripciones recurrentes (pago por usuario/mes).
+* **Disponibilidad:** Si la conexión a Internet de la oficina falla (o el proveedor cloud sufre una caída), los empleados podrían experimentar problemas para autenticarse en servicios locales (aunque esto se mitiga con cachés de credenciales locales en los portátiles).
