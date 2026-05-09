@@ -757,9 +757,80 @@ curl http://backend.staging.svc.cluster.local:3000 --connect-timeout 5
 
 ---
 
-### 5. Archivos de la Week 12
+### 5. Implementación del Nivel Intermediate (Week 12)
+
+Para escalar la seguridad y la gestión de recursos del clúster, se ha introducido el archivo `intermediate.tf`. Este fichero automatiza la creación de políticas de acceso y límites de consumo para evitar errores operativos y el agotamiento de recursos de la Máquina Virtual.
+
+#### 5.1. Definición del Fichero intermediate.tf
+Este archivo implementa dos pilares fundamentales de la administración de Kubernetes: RBAC y Resource Management.
+
+**A. Control de Acceso basado en Roles (RBAC)**
+Para cumplir con el principio de privilegio mínimo, se han definido los siguientes recursos:
+
+- `kubernetes_service_account (developer-sa)`: Crea una identidad específica para que los desarrolladores operen en el clúster sin usar permisos de administrador.
+- `kubernetes_role (read-only-role)`: Define permisos estrictos de "solo lectura" (verbos: get, list, watch) sobre pods, servicios, logs y mapas de configuración.
+- `kubernetes_role_binding (dev-read-only-binding)`: Vincula el rol de lectura a la cuenta de servicio del desarrollador dentro del namespace correspondiente.
+
+**B. Gestión y Límites de Recursos**
+Para garantizar la estabilidad del clúster y evitar que un entorno afecte al otro, se han configurado:
+
+- `kubernetes_resource_quota (env-resource-quota)`: Establece el "presupuesto" máximo de recursos para todo el namespace:
+  - CPU: 2 núcleos máximo.
+  - Memoria: 2Gi máximo.
+  - Pods: 10 pods como límite total.
+- `kubernetes_limit_range (env-limits)`: Inyecta automáticamente límites por defecto a cualquier contenedor nuevo que no los especifique, asegurando que ningún pod individual pueda acaparar recursos (ej. 512Mi de RAM como límite por defecto).
+
+#### 5.2. Despliegue del Nivel Intermediate
+Al ser un archivo integrado en el flujo de Terraform, su despliegue se realiza de forma transparente al aplicar los cambios en cada entorno.
+
+```bash
+cd ~/Practical-Assignment-2-Organizational-IT-Infrastructure/gsx-practica2/terraform/
+
+# Aplicar cambios en Desarrollo
+terraform workspace select dev
+terraform apply -var-file="dev.tfvars" -auto-approve
+
+# Aplicar cambios en Staging
+terraform workspace select staging
+terraform apply -var-file="staging.tfvars" -auto-approve
+```
+
+#### 5.3. Protocolo de Verificación y Auditoría
+Es imperativo verificar que Kubernetes está aplicando estas restricciones de forma efectiva.
+
+**Paso 1: Comprobar las Cuotas de Recursos**
+Para visualizar el consumo actual frente al límite máximo permitido en el entorno de desarrollo:
+
+```bash
+kubectl describe quota env-resource-quota -n dev
+```
+
+*Interpretación:* La columna Hard muestra el límite configurado en Terraform, mientras que Used muestra el consumo real de los pods actuales.
+
+**Paso 2: Comprobar el RBAC (Roles y Cuentas)**
+Para confirmar que los objetos de seguridad han sido creados correctamente:
+
+```bash
+kubectl get roles,rolebindings,serviceaccounts -n dev
+```
+
+*Resultado esperado:* Deben aparecer listados el `read-only-role`, el `dev-read-only-binding` y la cuenta `developer-sa`.
+
+**Paso 3: Test de Permisos (Simulación de Usuario)**
+Puedes verificar si la cuenta de desarrollador tiene permiso para listar pods con este comando:
+
+```bash
+kubectl auth can-i list pods -n dev --as=system:serviceaccount:dev:developer-sa
+```
+
+*Resultado:* Debe devolver `yes`. Si intentas una acción prohibida (como `delete pods`), devolverá `no`.
+
+---
+
+### 6. Archivos de la Week 12
 
 Los siguientes ficheros pertenecen a la entrega de la Week 12: Network Architecture & Security (Core):
 
 * `terraform/network_policies.tf` - Código HCL para la gestión de políticas de seguridad.
+* `terraform/intermediate.tf` - Código HCL para la gestión de RBAC y límites de recursos.
 * `decisiones_y_arquitectura.md` - Documentación de diseño de red y servicios core (DNS, DHCP, NTP).

@@ -303,6 +303,19 @@ Para garantizar el principio de privilegio mínimo (Zero Trust), se ha configura
 
 ---
 
+## Week 12: Resource Management & Access Control (Nivel Intermedio)
+
+### El Problema (Contexto)
+Aunque habíamos implementado NetworkPolicies para proteger la comunicación entre pods, no existían límites sobre cuántos recursos (CPU, RAM) podía consumir cada entorno. Esto significaba que un error de configuración en Desarrollo podría consumir todos los recursos de la máquina virtual, afectando a Staging y Production. Además, todos los usuarios con acceso al clúster tenían permisos completos, lo que representaba un riesgo de seguridad operativa.
+
+### La Solución y Decisiones de Diseño
+Hemos implementado dos capas adicionales de control: gestión de recursos a nivel de namespace y control de acceso basado en roles (RBAC).
+
+* **Control de Recursos:** Se ha implementado un objeto ResourceQuota llamado `env-resource-quota`. Esta decisión se tomó para establecer límites físicos (2 CPUs, 2Gi RAM) por entorno, evitando que errores de configuración o picos de carga en Desarrollo afecten a la estabilidad global de la máquina virtual.
+* **Seguridad de Acceso (RBAC):** Se ha implementado un modelo de privilegios mínimos mediante la creación de un `read-only-role`. Este rol permite a los desarrolladores realizar auditorías (listar pods, ver logs) a través de la cuenta de servicio `developer-sa` sin tener permisos para modificar o destruir la infraestructura.
+
+---
+
 ## Week 12: Core Services & Identity Management Research
 
 ### 1. Core Network Services
