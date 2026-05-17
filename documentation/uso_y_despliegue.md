@@ -834,3 +834,50 @@ Los siguientes ficheros pertenecen a la entrega de la Week 12: Network Architect
 * `terraform/network_policies.tf` - Código HCL para la gestión de políticas de seguridad.
 * `terraform/intermediate.tf` - Código HCL para la gestión de RBAC y límites de recursos.
 * `decisiones_y_arquitectura.md` - Documentación de diseño de red y servicios core (DNS, DHCP, NTP).
+
+---
+
+## 8. Manual de Operaciones (Runbook) - Week 13
+
+Este apartado detalla cómo administrar el sistema una vez desplegado.
+
+### 8.1. Despliegue de una Nueva Versión (Update)
+Para actualizar la imagen del frontend o backend sin caída de servicio:
+1. Actualiza el tag en `dev.tfvars` o `staging.tfvars`.
+2. Ejecuta `terraform apply -var-file="entorno.tfvars"`.
+3. Kubernetes realizará un *Rolling Update*, levantando el nuevo pod antes de borrar el antiguo.
+
+### 8.2. Escalado de Servicios
+Si el tráfico aumenta, puedes escalar el número de réplicas desde Terraform:
+1. Modifica la variable `nginx_replicas` en el archivo `.tfvars` correspondiente.
+2. Aplica los cambios: `terraform apply -var-file="..."`.
+
+### 8.3. Verificación de Logs y Salud
+* **Ver logs en tiempo real:** `kubectl logs -f deployment/nginx -n dev`.
+* **Ver eventos del sistema:** `kubectl get events -A --sort-by='.lastTimestamp'`.
+
+---
+
+## 9. Guía de Resolución de Problemas (Troubleshooting) - Week 13
+
+### Problema A: Error "Failed to create pod sandbox" al iniciar
+* **Síntoma:** Los pods se quedan en `ContainerCreating` y el log muestra errores de Calico.
+* **Causa:** El plugin de red (CNI) aún no ha terminado de inicializarse.
+* **Solución:** Esperar 2-3 minutos. Kubernetes se autorrecupera solo una vez que el pod `calico-node` está en estado `Running`.
+
+### Problema B: El servicio no es accesible desde fuera
+* **Síntoma:** El comando `minikube service` falla o la URL no carga.
+* **Causa:** El túnel de Minikube no está activo o el nombre del servicio es incorrecto.
+* **Diagnóstico:** Ejecutar `kubectl get svc -n dev` para confirmar el nombre exacto y verificar que el `NodePort` está asignado.
+
+---
+
+## 10. Casos de Uso de Troubleshooting
+
+### Escenario: El Servicio A (Nginx) no llega al Servicio B (Backend)
+* **Diagnóstico:** Ejecutar `kubectl get endpoints backend-service -n <namespace>`. Si la lista está vacía, el backend no está listo o los labels del selector no coinciden.
+* **Prueba de red:** Usar `kubectl exec` para hacer un `nslookup backend` y verificar si el CoreDNS resuelve la IP.
+
+### Escenario: Alta tasa de errores o latencia en el Dashboard
+* **Diagnóstico:** Revisar si el pod está llegando al límite de CPU/RAM definido en el intermediate.tf.
+* **Solución:** Ejecutar `kubectl top pods -A` para ver el consumo en tiempo real y ajustar las ResourceQuotas si es necesario.

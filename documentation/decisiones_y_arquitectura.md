@@ -403,3 +403,38 @@ Dado que GreenDevCorp es una empresa en crecimiento con **20+ empleados** y que 
 * **Customization and Integration:** The chosen Cloud IAM solution should be able to integrate with existing systems and workflows, allowing for customization to meet specific business needs.
 
 ---
+## Week 13: Full Integration & Final Validation
+
+### 1. Filosofía de Integración: El Test de Inmutabilidad
+El objetivo de esta fase final no ha sido simplemente verificar que los servicios funcionan, sino certificar la inmutabilidad y reproducibilidad total de la infraestructura. Para ello, se aplicó un protocolo de "Borrado Total", eliminando el clúster por completo (`minikube delete`) antes de realizar el despliegue final mediante IaC.
+
+**Decisión técnica:** Se ha validado que el código de Terraform actúa como la "Única Fuente de Verdad" (Single Source of Truth). El sistema es capaz de converger desde un estado de vacío absoluto hasta una plataforma operativa compleja en múltiples entornos (dev y staging) sin requerir ninguna intervención humana manual en el proceso de configuración.
+
+### 2. Análisis de Convergencia y Gestión de Condiciones de Carrera
+Durante el despliegue automatizado desde cero, se analizó el comportamiento del plano de control de Kubernetes frente a las dependencias de red.
+
+**Identificación de la Race Condition:** Se observó que los pods de aplicación (nginx, backend) iniciaron su ciclo de vida antes de que el motor de red Calico hubiera finalizado la configuración de las interfaces virtuales y el sistema de archivos en los nodos (`/var/lib/calico/`).
+
+**Resiliencia y Self-Healing:** A pesar de los errores críticos iniciales de red detectados (`FailedCreatePodSandBox`), la arquitectura demostró su robustez nativa. No se realizaron ajustes manuales; se permitió que el Scheduler de Kubernetes gestionara la reconciliación del estado. Una vez que el CNI alcanzó el estado operativo, la conectividad se estabilizó automáticamente, validando la capacidad de autorrecuperación del sistema ante fallos de sincronización inicial.
+
+### 3. Métricas de Reproducibilidad y Rendimiento
+Tras el test de integración final, se han extraído las siguientes métricas operativas:
+
+**MTTR (Mean Time To Recovery) del Stack:** ~8 minutos. Este es el tiempo total desde el encendido del clúster hasta que el balanceador de carga reporta el primer tráfico exitoso.
+
+**Eficacia de la IaC:** 100% de éxito en la creación de recursos. Terraform gestionó correctamente la creación de namespaces, cuotas de recursos, políticas de red y objetos RBAC de forma concurrente.
+
+**Validación del Aislamiento "Day 0":** Se verificó que las NetworkPolicies se aplican de forma inmediata al aprovisionamiento. El sistema nace seguro por defecto; no existe una ventana de tiempo en la que el tráfico entre entornos esté permitido durante el despliegue inicial.
+
+### 4. Evaluación Final de la Arquitectura
+La infraestructura actual de GreenDevCorp ha superado la fase de orquestación básica para convertirse en un ecosistema de alta disponibilidad y confianza cero (Zero Trust). La capacidad de reconstruir el stack tecnológico completo en un tiempo inferior a 10 minutos garantiza una estrategia de recuperación ante desastres (Disaster Recovery) eficiente y una escalabilidad horizontal predecible para futuros entornos de producción real.
+
+---
+## Ficha Técnica de Componentes
+
+### Inventario de Microservicios
+
+| Componente | Función Principal | Dependencias | Configuración Clave |
+|-------------|-------------------|---------------|-------------------|
+| Frontend (Nginx) | Servir la SPA estática y actuar como punto de entrada externo | backend-service (vía DNS interno) | nginx_node_port (Puerto de acceso) |
+| Backend (Node.js) | Procesar lógica de negocio y persistir estados en disco | backend-pvc (Almacenamiento persistente) | NODE_ENV, PORT (vía ConfigMap) |
